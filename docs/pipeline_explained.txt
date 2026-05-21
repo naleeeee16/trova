@@ -1,0 +1,666 @@
+BELGRADE GROUP RECOMMENDER — FULL PIPELINE EXPLAINED
+=====================================================
+Last updated: 2026-05-21
+
+This document walks through every stage of the system, from raw Telegram data
+all the way to the final ranked list sent back to users.  Each section covers
+what happens, why it happens that way, and includes a concrete example.
+
+=======================================================================
+OVERVIEW — THE TWO MAJOR PHASES
+=======================================================================
+
+Phase A: INGEST (offline, run once when new event data arrives)
+    Raw JSONL → cleaned NormalizedEvent objects → encoded corpus matrix
+
+Phase B: RECOMMENDATION (online, runs for every /find request in real time)
+    User messages → parsed preferences → semantic search → hard filter
+    → soft scoring → least-misery ranking → explanation → Telegram reply
+
+=======================================================================
+PHASE A · INGEST PIPELINE
+=======================================================================
+
+-----------------------------------------------------------------------
+A1. Raw data source
+-----------------------------------------------------------------------
+
+Events are scraped from Telegram channels (e.g. @balkanoutdoor) and saved
+as JSONL — one JSON object per line.  Each raw record has:
+
+    link              : canonical Telegram post URL
+    source_channel    : channel name
+    tags              : list of hashtags
+    event_description : English text (may contain {{LINK:n}} placeholders)
+    ru_event_description : Russian translation (optional)
+    links             : dict mapping placeholder keys to resolved URLs
+
+Example raw line:
+    {
+      "link": "https://t.me/balkanoutdoor/5660",
+      "source_channel": "balkanoutdoor",
+      "tags": ["#hiking", "#dogs", "#outdooractivities", "#nature"],
+      "event_description": "HIKING WITH DOGS. HOMOLSKY MOUNTAINS  January 18
+          We are heading east, to the Homolsky Mountains.
+          Sign up: {{LINK:0}}",
+      "links": {"0": "https://forms.gle/abc123"},
+      "ru_event_description": "ПОХОД С СОБАКАМИ..."
+    }
+
+-----------------------------------------------------------------------
+A2. Normalization (ingest/pipeline.py)
+-----------------------------------------------------------------------
+
+Each raw line is processed by parse_jsonl_line():
+
+  1. JSON parse — bad lines are silently skipped.
+  2. Pydantic validation into RawEventRecord.
+  3. Lines with no link are dropped.
+  4. Tags are normalized: lowercase, # stripped, whitespace cleaned.
+  5. Placeholder resolution: "{{LINK:0}}" is replaced with the real URL
+     from the links dict so the description is fully readable.
+  6. A stable 16-hex-char event ID is computed from the link URL via
+     SHA-256 (first 8 bytes → hex).  Same URL always → same ID.
+  7. Heuristic classification: should this event be included in the
+     search index?
+
+Result: NormalizedEvent objects written to
+    data/processed/events_normalized_test.jsonl
+
+Example NormalizedEvent (abbreviated):
+    event_id              : "3db67c7db4b8a35e"
+    link                  : "https://t.me/balkanoutdoor/5660"
+    source_channel        : "balkanoutdoor"
+    tags                  : ["hiking", "dogs", "outdooractivities", "nature"]
+    event_description_resolved : "HIKING WITH DOGS...  Sign up: https://forms.gle/abc123"
+    include_in_index      : True
+    exclude_reason        : None
+
+-----------------------------------------------------------------------
+A3. Heuristic classification (ingest/heuristics.py)
+-----------------------------------------------------------------------
+
+The classifier decides if an event is a real attendable public event
+or just a channel announcement / repost.
+
+Exclusion signals (set include_in_index=False):
+  - Description shorter than 40 characters
+  - No tags at all
+  - Only one or two generic tags (e.g. just ["belgrade"])
+  - Text looks like a pure news item (contains "breaking:", "just in:")
+  - Appears to be a photo caption with no event content
+
+Included events can be further filtered by an optional LLM classifier
+(OpenAI batch call) using flag --classify-events during ingest.
+That LLM pass catches edge cases the heuristics miss (e.g. "ad" posts
+that have plenty of hashtags but are selling a product, not an event).
+
+-----------------------------------------------------------------------
+A4. Corpus encoding (bot/pipeline.py · load_corpus_sync)
+-----------------------------------------------------------------------
+
+At bot startup, the full normalized JSONL is loaded once:
+
+  1. Only events with include_in_index=True are kept (~6,900 out of ~8,000).
+  2. Each event is converted to an embedding text string by build_embedding_text():
+
+        channel: balkanoutdoor
+        tags: hiking, dogs, outdooractivities, nature, adventure
+        description: HIKING WITH DOGS. HOMOLSKY MOUNTAINS  January 18
+            We are heading east, to the Homolsky Mountains...
+
+  3. All embedding texts are encoded in one batch by SentenceEncoder,
+     which wraps paraphrase-multilingual-MiniLM-L12-v2 (a 118M-param
+     multilingual sentence transformer).
+  4. The result is _corpus_matrix — a float32 matrix of shape
+     (n_events, 384).  This matrix stays in memory for the lifetime
+     of the bot process; every /find request queries it.
+
+=======================================================================
+PHASE B · RECOMMENDATION PIPELINE (per /find request)
+=======================================================================
+
+A /find session in the Telegram bot works like this:
+
+  User A types: /find
+  Bot replies:  "Send your preferences now. Use /go when everyone is ready."
+  User A types: "hocu techno zurku sto glasniju"
+  User B types: "ja sam veganka, samo besplatni dogadjaji"
+  User C types: "hocu negde sa psom da idem"
+  Someone types: /go  (or the 3-minute timer fires automatically)
+
+Everything that follows is the recommendation pipeline.
+
+-----------------------------------------------------------------------
+B1. Session collection (bot/session.py, bot/handlers.py)
+-----------------------------------------------------------------------
+
+SessionManager keeps an in-memory session per chat_id.
+Each message from a unique user_id during the open window is appended.
+If the same user sends multiple messages they are concatenated:
+
+    user 7850932535 → "hocu negde sa psom da idem"
+    user 9912345678 → "ja sam veganka, samo besplatni dogadjaji"
+    user 4401122334 → "hocu techno zurku sto glasniju"
+
+When /go fires (or the timer expires), session.combined_inputs() returns
+a dict {user_id: combined_text}.
+
+-----------------------------------------------------------------------
+B2. Preference parsing — one user at a time (llm/openai_preferences.py)
+-----------------------------------------------------------------------
+
+Each user's text is sent to OpenAI (GPT-4o-mini by default) with a
+detailed system prompt.  The model returns structured JSON that is
+validated into ParsedUserPreferences (a Pydantic model).
+
+ParsedUserPreferences has two sub-objects:
+
+  hard_constraints:
+    city                         : "belgrade" | "unknown" | None
+    must_be_free                 : True | False | None
+    budget_max_rsd               : int | None
+    forbidden_event_categories   : list[str]
+    venue_requirements           : list[str]   (smoke_free, pet_friendly, non_alcoholic)
+    dietary_restrictions         : list[str]   (vegan, gluten_free, nut_free, halal)
+    preferred_days_of_week       : list[str]   (monday…sunday)
+    earliest_start_hour_weekday  : int | None
+
+  soft_preferences:
+    liked_types      : list[str]   (snake_case interest tags)
+    noise_tolerance  : "low" | "medium" | "medium_high" | "high" | "unknown"
+    ok_paid_eur      : bool | None
+
+EXAMPLE — parsing "hocu techno zurku sto glasniju":
+  hard_constraints : { forbidden_event_categories: [] }
+  soft_preferences : { liked_types: ["techno", "club", "nightlife"],
+                       noise_tolerance: "high" }
+  summary_one_line : "User wants a very loud techno party or nightclub."
+
+EXAMPLE — parsing "ja sam veganka, samo besplatni dogadjaji":
+  hard_constraints : { must_be_free: True,
+                       dietary_restrictions: ["vegan"] }
+  soft_preferences : { liked_types: ["restaurant", "food_festival"] }
+  summary_one_line : "Vegan user looking only for free events."
+
+EXAMPLE — parsing "hocu negde sa psom da idem":
+  hard_constraints : { venue_requirements: ["pet_friendly"] }
+  soft_preferences : { liked_types: [] }   ← short/vague; LLM didn't infer
+  summary_one_line : "User wants to go somewhere pet-friendly with their dog."
+
+NOTE on empty liked_types: Short, ambiguous queries give the LLM little
+venue context.  "negde" ("somewhere") with no venue noun means no
+liked_types are inferred.  The semantic search still works — the raw
+text "hocu negde sa psom" embeds close to dog-hiking events naturally.
+The liked_types bonus just won't be applied during scoring.
+
+City backfill (step 1b in pipeline.py):
+  If the LLM didn't set a city but the raw text contains "u Beogradu",
+  "Belgrade", or "Beograd", a regex rule fills in city="belgrade".
+  This activates the city hard filter that the LLM might have missed.
+
+-----------------------------------------------------------------------
+B3. Semantic search (bot/pipeline.py · step 2)
+-----------------------------------------------------------------------
+
+Each user's raw text is combined with their liked_types tokens and
+encoded into a query vector.
+
+Example for user A (techno user):
+  per_query = "hocu techno zurku sto glasniju\n\ntechno club nightlife"
+  → encodes to a 384-dim vector
+
+For groups, each user's vector is computed separately and then averaged:
+  query_vec = mean([vec_A, vec_B, vec_C])
+
+This gives every member equal weight regardless of message length.
+A one-word query ("techno") doesn't get drowned out by a paragraph.
+
+Some niche Serbian terms are expanded before embedding:
+  "turbofolk" → "turbofolk Serbian folk pop music party dance"
+  "kafana"    → "kafana Serbian tavern folk music traditional drinks"
+  "splav"     → "splav river raft party club Belgrade nightlife"
+
+cosine_top_k() then computes dot-product similarity between query_vec
+and every row of _corpus_matrix and returns the top 80 candidate events.
+
+Keyword fallback (step 2, bottom):
+  If the top cosine score is below 0.30 (essentially noise — the embedding
+  model found nothing relevant), a BM25-style keyword search is also run
+  and its results are merged into the candidate pool.  This handles very
+  short or ambiguous queries.
+
+-----------------------------------------------------------------------
+B4. Event attribute extraction (extract/attributes.py)
+-----------------------------------------------------------------------
+
+For every candidate event, structured signals are extracted by
+extract_event_attributes().  This is a two-layer process:
+
+Layer 1 — Rules:
+  - Tag-to-type mapping: each hashtag is looked up in a ~400-entry dict.
+    "#jazz" → ["jazz", "live_music"]
+    "#hiking" → ["hiking", "outdoor"]
+    "#dogs" → (no entry → ignored at tag level)
+    "#outdooractivities" → ["outdoor"]
+  - Description keyword scan: catches what hashtags miss.
+    "hiking" in text → adds "hiking" to type_hints
+    "dogs" / "dog trekking" in text → no direct keyword (dogs are a
+      venue_requirement, not a type_hint in the current vocabulary)
+  - Price signals: regex for "besplatno", "Free entry", RSD amounts, EUR amounts
+  - City detection: regex for "Belgrade", "Beograd", "Novi Sad", etc.
+  - Date/day extraction: date patterns and day-name mentions
+
+Layer 2 — Optional lazy Gemini enrichment:
+  If env var USE_LAZY_GEMINI_EVENT_ATTRIBUTES=1 and the rules couldn't
+  determine noise_level ("unknown"), Gemini is called for that event only.
+  Rules-based price/city signals are always kept; Gemini enriches noise,
+  outdoor, type_hints, dates when the rules were inconclusive.
+
+Result for "HIKING WITH DOGS. HOMOLSKY MOUNTAINS":
+  type_hints   : ["hiking", "outdoor", "nature", "excursion", "lunch"]
+  noise_level  : "unknown"  (hiking events don't map to a noise category)
+  outdoor_hint : True
+  city_hint    : "unknown"  (no Belgrade/Novi Sad mention)
+  price_free   : False
+  price_paid   : False  (no ticket price mentioned)
+  price_eur    : 0  (transport/food costs are ignored)
+
+-----------------------------------------------------------------------
+B5. Hard filtering (retrieve/hard_filters.py)
+-----------------------------------------------------------------------
+
+passes_all_hard_constraints() checks every member's hard constraints
+against each candidate event.  The event passes only if ALL members'
+constraints are satisfied (intersection rule).
+
+Checks performed:
+  CITY:       If member set city="belgrade", events in novi_sad or
+              serbia_other are rejected.  Events with city="unknown"
+              pass (benefit of the doubt — don't over-filter).
+
+  PRICE/FREE: If must_be_free=True, the event must have price_free_signal
+              OR have no paid signal at all.  If budget_max_rsd is set,
+              any event with a known price above the cap is rejected.
+
+  FORBIDDEN:  Each token in forbidden_event_categories is checked against
+              event tags and type_hints using substring matching.
+              If user forbids "techno" and event has tag "techno" → rejected.
+
+  ADULTS-ONLY: If type_hints contains "adults_only", the event is blocked
+              for any member who listed adults_only in forbidden OR who
+              banned ≥2 nightlife venue types (family-safe heuristic).
+
+  DAYS:       If member set preferred_days_of_week, the event must mention
+              at least one matching day.  Events with no day info pass.
+
+  VENUE REQS: "smoke_free" blocks events tagged smoking_area.
+              "pet_friendly" blocks events tagged no_dogs / no_pets.
+
+  DIETARY:    "gluten_free" blocks events tagged "gluten", "breaded".
+              "nut_free" blocks events tagged "nut_bar", "peanut_heavy".
+
+EXAMPLE — our 3-member group:
+  Member A (techno, no constraints)
+  Member B (vegan, must_be_free, dietary: vegan)
+  Member C (dog, venue_req: pet_friendly)
+
+An event "Techno night, €15 entry" → REJECTED (Member B: must_be_free)
+An event "Free outdoor dog hike"   → PASSES all three members
+An event "Free vegan festival"     → might pass A and B but rejected for C
+                                     if it's indoors (no pet_friendly signal)
+
+The system is permissive by default: if the event has no price info,
+no city info, or no day info, those checks pass.  Over-filtering hurts
+the user experience more than under-filtering.
+
+Up to 20 events that pass all hard filters become the final candidates.
+
+-----------------------------------------------------------------------
+B6. Soft scoring — per (user, event) pair (rank/soft_score.py)
+-----------------------------------------------------------------------
+
+soft_adjusted_score() produces a 0–1 score for one member's fit to one event.
+
+Step 1 — Semantic base:
+  The cosine similarity from the initial search (already computed in B3)
+  is used as the base score.  If it's below 0.40 (the squash margin),
+  it's quadratically compressed: score = score² / 0.40.
+  This punishes weak matches more aggressively than a linear scale would.
+
+Step 2 — Liked-type bonus (cosine-based, not substring):
+  Each liked_type was pre-embedded into a 384-dim vector in step 2b.
+  The bonus path computes cosine similarity between every liked_type
+  vector and the event's corpus vector:
+
+    strong match (cosine ≥ 0.50): +0.08 per match
+    weak match   (cosine 0.35–0.49): +0.03 per match
+    total bonus capped at +0.28
+
+  Partial mismatch penalty:
+    If user has N liked_types but only M matched → penalty += (N-M)/N * 0.10
+    Prevents one lucky match from hiding that other preferences were missed.
+
+  Full mismatch penalty:
+    If ALL liked_type cosines are below 0.20 → additional -0.10
+    ("this event is completely unrelated to what you want")
+
+  Fallback (no embedding vectors, e.g. test scripts):
+    Falls back to substring matching of liked_types against event tags.
+
+EXAMPLE — Member C ("hocu negde sa psom", liked_types=[]):
+  No liked_types → no bonus, no penalty on the type dimension.
+  Score is purely: semantic_base (squash-compressed if weak).
+  Dog-hiking events score well because the semantic query already
+  points at them; Member C just doesn't get the bonus boost.
+
+EXAMPLE — Member A ("hocu techno zurku", liked_types=["techno","club","nightlife"]):
+  Event "Techno night @Drugstore":
+    semantic_base     : ~0.72
+    "techno" cosine   : ~0.78  → strong match → +0.08
+    "club" cosine     : ~0.65  → strong match → +0.08
+    "nightlife" cosine: ~0.61  → strong match → +0.08
+    bonus             : 0.24 (capped at 0.28)
+    final score       : 0.72 + 0.24 = 0.96
+
+  Event "Free outdoor dog hike":
+    semantic_base     : ~0.35 → squashed to 0.35² / 0.40 = 0.31
+    "techno" cosine   : ~0.05  → miss
+    "club" cosine     : ~0.08  → miss
+    "nightlife" cosine: ~0.10  → miss
+    ALL below 0.20 → full mismatch penalty -0.10
+    partial penalty   : -0.10 (3 missed / 3 total)
+    final score       : 0.31 - 0.10 - 0.10 = 0.11
+
+Step 3 — Noise mismatch penalty:
+  noise pref "high" + event noise "low"    → -0 (no penalty, loud person is fine)
+  noise pref "low"  + event noise "high"   → -0.12
+  noise pref "low"  + event noise "medium" → -0.04
+  noise pref "medium" + event noise "high" → -0.06
+
+-----------------------------------------------------------------------
+B7. Least-misery group ranking (rank/group_rank.py)
+-----------------------------------------------------------------------
+
+For each candidate event, per_user_soft_scores() is called to get one
+score per group member.  Then:
+
+  min_score  = min(scores)   ← the person who benefits least
+  mean_score = mean(scores)
+
+Events are sorted by (min_score DESC, mean_score DESC).
+This is "least-misery" aggregation: the worst-off member drives the rank.
+No one gets completely left out just because two others love the event.
+
+EXAMPLE — 3 members, event "Free outdoor dog hike":
+  Member A (techno): 0.11  ← very unhappy
+  Member B (vegan, free): 0.61  ← ok (free, outdoor)
+  Member C (dog): 0.78  ← great
+
+  min_score  = 0.11
+  mean_score = 0.50
+
+Compare with event "Free vegan festival (indoor, no dogs)":
+  Member A (techno): 0.20
+  Member B (vegan, free): 0.88  ← great
+  Member C (dog): 0.20  ← pet_friendly unknown → not hard-filtered, but semantically weak
+
+  min_score  = 0.20
+  mean_score = 0.43
+
+The vegan festival ranks HIGHER here because min=0.20 > 0.11.
+Member A dislikes both equally; the vegan festival at least keeps B happy
+without making C worse off.
+
+Deduplication:
+  Recurring monthly series (same event title, different month) are collapsed
+  to one result.  The title is truncated at the first month name found in
+  the first 80 characters, then year numbers are stripped, and a 60-char
+  hash is computed.  Only the highest-scoring occurrence is kept.
+
+  Example: "HIKING WITH DOGS. HOMOLSKY MOUNTAINS January 18" and
+           "HIKING WITH DOGS. HOMOLSKY MOUNTAINS March 9" → same dedup key
+           → only the better-scoring one appears in results.
+
+Score floor:
+  Results with min_soft < SCORE_FLOOR (default 0.30) are dropped before
+  returning.  These are semantically unrelated events that made it past
+  hard filtering only because no hard constraint excluded them.
+
+-----------------------------------------------------------------------
+B8. Per-event explanations (llm/openai_explain.py)
+-----------------------------------------------------------------------
+
+A single OpenAI call is made with:
+  - The one-line summaries of all members' preferences
+  - The titles and type_hints of the ranked events
+
+It returns one short sentence (in the chosen language) per event
+explaining WHY that event fits the group.
+
+Language is detected automatically: if >50% of input looks Cyrillic,
+Russian is chosen; if it looks Serbian Latin, Serbian is chosen;
+otherwise English.
+
+Example reason (Serbian) for "HIKING WITH DOGS. HOMOLSKY MOUNTAINS":
+  "Idealno za grupu koja želi aktivan izlet u prirodi sa psom."
+
+-----------------------------------------------------------------------
+B9. Conflict detection (bot/pipeline.py · _detect_preference_conflicts)
+-----------------------------------------------------------------------
+
+Before showing results, the pipeline checks for preference clashes:
+
+  Liked-type vs forbidden-category cross-check:
+    If member A likes "techno" and member B has "techno" in forbidden → conflict.
+
+  Noise opposition:
+    If any two members have noise tolerances {"high", "low"} → conflict.
+
+Conflicts are formatted as human-readable strings and sent to the group
+chat before the results so users know there's no perfect option.
+
+Example conflict message (Serbian):
+  "Napomena: neko želi glasnu atmosferu, neko tiho okruženje."
+
+-----------------------------------------------------------------------
+B10. Result formatting and Telegram delivery (bot/formatter.py)
+-----------------------------------------------------------------------
+
+format_results() builds an HTML message:
+
+  Initial view (show_all=False): top 5 events
+  Each entry shows:
+    - Rank number and title (first ~110 chars)
+    - Group score (min_soft as %)
+    - Soft-preference mismatches for this event (from _compute_mismatches)
+    - Per-event explanation reason
+    - Telegram link
+
+  "Show all results" inline button reveals events 6–10.
+  "New search" button prompts /find again.
+
+Example output (simplified):
+
+  1. HIKING WITH DOGS. HOMOLSKY MOUNTAINS | 52% ✓
+     "Idealno za grupu koja želi aktivan izlet u prirodi sa psom."
+     → t.me/balkanoutdoor/5660
+
+  2. DOG TREKKING. GRADAC | 51% ✓
+     "Šetnja uz reku idealna za vruć letan dan sa kućnim ljubimcima."
+     → t.me/balkanoutdoor/4620
+
+-----------------------------------------------------------------------
+B11. SQLite logging (bot/storage.py)
+-----------------------------------------------------------------------
+
+After every successful /find, save_request() writes one row to
+data/bot_requests.db:
+
+  Table: requests
+    timestamp, chat_id, lang, n_users,
+    user_inputs  (JSON: {user_id: raw_text})
+    user_tags    (JSON: flat preference summary per user)
+    n_results
+    results      (JSON: full ranked list with scores, cosines, attrs)
+    conflicts    (JSON: conflict strings)
+
+The results JSON includes per-user cosine breakdowns per liked_type,
+which is what you saw in the question that prompted this document:
+
+  user_scores: [
+    {
+      "user": 1,
+      "noise": "unknown",
+      "liked_cosines": {}   ← empty because liked_types was []
+    }
+  ]
+
+NOTE: the "outdoor: null" field in user_tags is always null because
+_build_user_tags() reads getattr(soft, "outdoor_preference", None)
+and ParsedSoftPreferences has no field named outdoor_preference.
+That field name is a leftover from an older schema; it was renamed
+but the storage read was never updated.  It's cosmetic: the actual
+scoring never reads this field.
+
+=======================================================================
+FULL DATA FLOW DIAGRAM
+=======================================================================
+
+OFFLINE (ingest):
+  Telegram JSONL
+      │
+      ▼
+  parse_jsonl_line()         ← normalize tags, resolve placeholders
+      │
+      ▼
+  classify_for_retrieval_index()  ← heuristic: is this a real event?
+      │  (optional: LLM batch classifier for edge cases)
+      ▼
+  events_normalized_test.jsonl   ← written once, reused by bot
+      │
+      ▼
+  SentenceEncoder.encode(all_texts)
+      │
+      ▼
+  _corpus_matrix  (n_events × 384, float32, in RAM)
+
+ONLINE (per /find):
+  User messages in group chat
+      │
+      ▼
+  SessionManager.add_message()   ← collect during window
+      │
+  /go or timer fires
+      │
+      ▼
+  parse_preferences_openai()     ← one call per user → ParsedUserPreferences
+      │ (city backfill from regex if LLM missed it)
+      ▼
+  SentenceEncoder.encode(per_user queries)  ← liked_types expansion + raw text
+      │
+      ▼
+  mean(per_user_vecs)  → query_vec
+      │
+      ▼
+  cosine_top_k(corpus_matrix, query_vec, k=80)  → pool (event_idx, score)
+      │  (keyword fallback if top score < 0.30)
+      ▼
+  extract_event_attributes()     ← rules-based: type_hints, noise, price, city
+      │  (optional lazy Gemini enrichment if noise=unknown)
+      ▼
+  passes_all_hard_constraints()  ← drop violators; keep ≤20 candidates
+      │
+      ▼
+  _detect_preference_conflicts() ← warn group before showing results
+      │
+      ▼
+  soft_adjusted_score()          ← per (user, event): base + liked bonus - penalties
+      │
+      ▼
+  rank_by_least_misery()         ← sort by (min_score, mean_score); dedup series
+      │
+      ▼
+  score_floor filter             ← drop min_soft < 0.30
+      │
+      ▼
+  explain_per_event()            ← single OpenAI call → one sentence per event
+      │
+      ▼
+  format_results()               ← HTML for Telegram
+      │
+      ▼
+  bot.send_message()             ← delivered to group chat
+      │
+      ▼
+  save_request()                 ← log to SQLite
+
+=======================================================================
+KEY DESIGN DECISIONS AND WHY
+=======================================================================
+
+1. SEMANTIC SEARCH FIRST, STRUCTURED FILTERING SECOND
+   Embedding search gives us 80 semantically relevant candidates quickly.
+   Then structured rules (cheap, fast) do the hard filtering.  This avoids
+   running expensive attribute extraction on all 6,900 events — only the
+   top 80 candidates get attrs computed.
+
+2. AVERAGE PER-USER QUERY VECTORS (not concatenate text)
+   Concatenating all users' text into one query string causes longer
+   messages to dominate.  Averaging gives each user equal weight.
+
+3. LIKED-TYPES EMBEDDED, NOT STRING-MATCHED
+   String matching "jazz" against event tags misses synonyms: "bebop",
+   "swing", "jazznight".  Embedding "jazz" and computing cosine against
+   the event vector catches all of these because the sentence transformer
+   encodes semantic meaning.  Threshold 0.35 = "related", 0.50 = "same".
+
+4. LEAST-MISERY AGGREGATION
+   A group recommendation system must protect the least-satisfied member.
+   Averaging scores would hide the case where one person hates an event
+   (score 0.05) but two others love it (scores 0.95, 0.90) → mean 0.63
+   looks great, but one person had a terrible time.  Sorting by min_score
+   first surfaces events that are acceptable to everyone.
+
+5. HARD CONSTRAINTS ARE BINARY, SOFT PREFERENCES ARE CONTINUOUS
+   "must_be_free" is a binary filter: any event with a paid signal is
+   rejected completely.  "likes jazz" is a bonus: events with jazz score
+   higher but non-jazz events are still returned if nothing better exists.
+
+6. CORPUS ENCODED ONCE AT STARTUP
+   Re-encoding 6,900 events on every /find request would take ~30 seconds.
+   Encoding once at startup takes ~8 seconds and the matrix lives in RAM.
+   Each /find query encoding takes ~50ms.
+
+7. DEDUPLICATION OF RECURRING SERIES
+   "Hiking with dogs — January", "Hiking with dogs — March", etc. would
+   otherwise fill the top-10 with the same event repeated.  Truncating
+   at the first month name collapses them to one canonical entry.
+
+=======================================================================
+CONFIGURATION KNOBS
+=======================================================================
+
+SCORE_FLOOR (bot/config.py)
+    Minimum min_soft score for a result to be shown.  Default: 0.30.
+    Lower → more results but lower quality.  Higher → fewer but sharper.
+
+USE_LAZY_GEMINI_EVENT_ATTRIBUTES (env var)
+    Set to "1" to enable Gemini enrichment for events where the rule-based
+    extractor couldn't determine noise level.  Adds latency per request.
+
+COLLECTION_WINDOW_SECONDS (bot/session.py)
+    How long the bot waits for group members to submit preferences after
+    /find.  Default: 180 seconds (3 minutes).
+
+GEMINI_MODEL / OPENAI model
+    Override the LLM used for preference parsing or event classification.
+    Default for preference parsing: gpt-4o-mini (OpenAI).
+
+k=80 in cosine_top_k
+    How many semantic candidates are retrieved before hard filtering.
+    Increase to get more diversity; decrease for speed.
+
+candidates >= 20 cutoff (pipeline.py step 3)
+    Hard filter stops once 20 events pass.  Increase for broader coverage
+    at the cost of more scoring work.

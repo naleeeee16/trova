@@ -1,0 +1,21 @@
+# API + Streamlit UI. First request may download the embedding model from Hugging Face.
+# Create a .env file with GEMINI_API_KEY=your_key_here before running.
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8080"
+    environment:
+      BELGRADE_RECOMMENDER_ROOT: /app
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    ports:
+      - "8501:8501"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      - api

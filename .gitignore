@@ -1,0 +1,38 @@
+# Environment & secrets
+.env
+.env.*
+
+# Generated data
+data/
+
+# Test output files
+test_results_*.txt
+*_output.txt
+_tag_dump.txt
+pipeline_documentation.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / tools
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+results/

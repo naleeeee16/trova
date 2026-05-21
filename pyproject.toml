@@ -1,0 +1,46 @@
+[project]
+name = "belgrade-group-recommender"
+version = "0.1.0"
+description = "LLM-assisted group event recommender for Belgrade"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.5",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.26",
+]
+gemini = [
+    "google-genai>=1.5",
+]
+retrieve = [
+    "sentence-transformers>=3.0.0",
+    "faiss-cpu>=1.8.0",
+]
+ui = [
+    "streamlit>=1.28",
+]
+api = [
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.27",
+]
+bot = [
+    "python-telegram-bot>=21.0",
+    "openai>=1.30",
+    "apscheduler>=3.10,<4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

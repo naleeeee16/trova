@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "users": [
+    {
+      "user_id": "ana",
+      "display_name": "Ana",
+      "preferences_plain_text": "Volim mirne kulturne stvari u Beogradu: izložbe, predavanja, klasičnu ili akustičnu muziku. Ne želim klubove ni techno. Budžet do oko 2000 RSD po osobi; vikend poslepodne ili uveče, ali ne kasno noću.",
+      "hard_constraints": {
+        "city": "belgrade",
+        "budget_max_rsd": 2000,
+        "must_be_free_or_under_budget": true,
+        "forbidden_event_categories": ["techno", "rave", "nightclub_late"],
+        "latest_end_hour": 23
+      },
+      "soft_preferences": {
+        "liked_types": ["exhibition", "lecture", "classical_music", "museum"],
+        "noise_tolerance": "low",
+        "preferred_time_windows": ["weekend_afternoon", "weekend_evening_early"]
+      }
+    },
+    {
+      "user_id": "marko",
+      "display_name": "Marko",
+      "preferences_plain_text": "Tražim aktivnosti napolju: planinarenje, lakši trekking, izlet van grada ako je organizovano. Plaćam ture u evrima. Ne mora u samom centru.",
+      "hard_constraints": {
+        "city": "belgrade_or_daytrip_serbia",
+        "forbidden_event_categories": []
+      },
+      "soft_preferences": {
+        "liked_types": ["hiking", "excursion", "nature", "outdoor"],
+        "noise_tolerance": "medium",
+        "ok_paid_eur": true
+      }
+    },
+    {
+      "user_id": "jelena",
+      "display_name": "Jelena",
+      "preferences_plain_text": "Samo besplatni događaji. Radije posle 18h radnim danom ili vikendom. Ne volim eksplicitno reklamirane žurke i techno open-air.",
+      "hard_constraints": {
+        "city": "belgrade",
+        "must_be_free": true,
+        "earliest_start_hour_weekday": 18,
+        "forbidden_event_categories": ["techno", "rave"]
+      },
+      "soft_preferences": {
+        "liked_types": ["concert_free", "cinema", "talk", "community_event"],
+        "noise_tolerance": "low"
+      }
+    },
+    {
+      "user_id": "stefan",
+      "display_name": "Stefan",
+      "preferences_plain_text": "Volim živu muziku ako je jazz ili indie u manjem klubu. Ne interesuju me pop-up šoping događaji ni čisti promo postovi.",
+      "hard_constraints": {
+        "city": "belgrade",
+        "forbidden_event_categories": ["popup_shopping_only", "pure_promo"]
+      },
+      "soft_preferences": {
+        "liked_types": ["jazz", "indie", "live_music_small_venue"],
+        "noise_tolerance": "medium_high"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "group_id": "weekend_group",
+      "display_name": "Vikend ekipa",
+      "member_user_ids": ["ana", "marko", "jelena"],
+      "notes": "Test scenario: kultura + priroda + mora biti free za Jelenu - kompromis oko besplatnog outdoor ili jeftinog muzeja."
+    },
+    {
+      "group_id": "music_night",
+      "display_name": "Muzička večer",
+      "member_user_ids": ["stefan", "ana"],
+      "notes": "Stefan želi živu muziku; Ana ne želi buku - srednji kompromis (akustično / rano veče)."
+    }
+  ]
+}

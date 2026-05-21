@@ -1,0 +1,17 @@
+.venv
+.git
+.env
+.env.*
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+*.zip
+.DS_Store
+data/raw
+data/processed
+.cursor
+tests
+scripts
+docs

@@ -1,0 +1,194 @@
+{
+  "version": 2,
+  "description": "Manually labelled relevant event_id pairs for the smoke corpus — 15 eval cases across 4 personas (Ana, Jelena, Stefan, Marko).",
+  "cases": [
+    {
+      "case_id": "jelena_free_classical",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "jelena",
+      "use_hard": true,
+      "k": 15,
+      "semantic_pool": 80,
+      "relevant_event_ids": ["b8fcaa336941b34b"]
+    },
+    {
+      "case_id": "jelena_free_concerts",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "jelena",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "b8fcaa336941b34b",
+        "fb4000cf03be12e2",
+        "28703012558dcf3c",
+        "bdc75ab4de7a4c28"
+      ]
+    },
+    {
+      "case_id": "jelena_free_nonmusic",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "jelena",
+      "use_hard": true,
+      "k": 15,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "ba039c7a91794b38",
+        "f61282ca2e71c9f7",
+        "785b2fc89eb60094"
+      ]
+    },
+    {
+      "case_id": "ana_culture_exhibition",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "ana",
+      "use_hard": true,
+      "k": 15,
+      "semantic_pool": 80,
+      "relevant_event_ids": ["d8a017d8dc36c42b", "139317182c9668ad"]
+    },
+    {
+      "case_id": "ana_classical_concerts",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "ana",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "b8fcaa336941b34b",
+        "28703012558dcf3c",
+        "bdc75ab4de7a4c28"
+      ]
+    },
+    {
+      "case_id": "ana_art_exhibitions",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "ana",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "028eea5f210e82ec",
+        "19686c2b03368cb7",
+        "00d62f7daa1654b1",
+        "5eebfbc342e0667d"
+      ]
+    },
+    {
+      "case_id": "ana_film_lecture",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "ana",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "5c1094218b9c0255",
+        "edac925f89b97ef3"
+      ]
+    },
+    {
+      "case_id": "stefan_jazz",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "stefan",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "51941eb2649c95e1",
+        "62f62497ea875a36"
+      ]
+    },
+    {
+      "case_id": "stefan_indie_acoustic",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "stefan",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "b8bdd50a6b16b125",
+        "6fd58e0a8871fac4"
+      ]
+    },
+    {
+      "case_id": "stefan_experimental_ambient",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "stefan",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "1c70dc9ca1716f1c",
+        "40a899db8c7e0ec7"
+      ]
+    },
+    {
+      "case_id": "stefan_all_live_music",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "stefan",
+      "use_hard": true,
+      "k": 15,
+      "semantic_pool": 100,
+      "relevant_event_ids": [
+        "51941eb2649c95e1",
+        "62f62497ea875a36",
+        "b8bdd50a6b16b125",
+        "6fd58e0a8871fac4",
+        "1c70dc9ca1716f1c"
+      ]
+    },
+    {
+      "case_id": "marko_hiking",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "marko",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "6df62bf2ca93d96e",
+        "1ac2de65fa279ccd",
+        "220e3c893d6c397c"
+      ]
+    },
+    {
+      "case_id": "marko_water_sports",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "marko",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "740130523d958422",
+        "f267231c28676b66"
+      ]
+    },
+    {
+      "case_id": "marko_nature_outdoor",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "marko",
+      "use_hard": true,
+      "k": 15,
+      "semantic_pool": 100,
+      "relevant_event_ids": [
+        "6df62bf2ca93d96e",
+        "1ac2de65fa279ccd",
+        "220e3c893d6c397c",
+        "740130523d958422",
+        "f267231c28676b66",
+        "37862fc3e5f39ba1"
+      ]
+    },
+    {
+      "case_id": "marko_birdwatching_nature",
+      "events_path": "fixtures/events_smoke.jsonl",
+      "fixture_user_id": "marko",
+      "use_hard": true,
+      "k": 10,
+      "semantic_pool": 80,
+      "relevant_event_ids": [
+        "37862fc3e5f39ba1",
+        "6df62bf2ca93d96e"
+      ]
+    }
+  ]
+}
