@@ -13,7 +13,7 @@ class SentenceEncoder:
 
     def __init__(self, model_name: str | None = None) -> None:
         self.model_name = (
-            model_name or os.environ.get("SENTENCE_TRANSFORMER_MODEL") or "all-MiniLM-L6-v2"
+            model_name or os.environ.get("SENTENCE_TRANSFORMER_MODEL") or "paraphrase-multilingual-MiniLM-L12-v2"
         ).strip()
         self._model: Any = None
 

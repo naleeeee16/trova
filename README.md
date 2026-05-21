@@ -3,6 +3,8 @@
 A group-aware Telegram bot that finds Belgrade events everyone in your chat can enjoy.
 Each member describes their preferences in plain text — the system parses them, searches a corpus of thousands of real events, and returns the best matches using a least-misery group ranking (no one gets left out).
 
+## [→ Try the bot: t.me/kompromis_bot](https://t.me/kompromis_bot)
+
 > **Deployment:** The bot is deployed to the cloud and ready to use — jump straight to [Using the Bot](#using-the-bot-user-guide) if you just want to try it.
 
 ---
@@ -138,7 +140,6 @@ OPENAI_API_KEY=your_openai_api_key
 
 # Optional
 GEMINI_API_KEY=your_gemini_api_key
-SENTENCE_TRANSFORMER_MODEL=all-MiniLM-L6-v2
 USE_LAZY_GEMINI_EVENT_ATTRIBUTES=0
 ```
 
@@ -159,7 +160,7 @@ Expected startup output:
 ```
 INFO  bot.pipeline  Loading corpus from data/processed/events_normalized_test.jsonl …
 INFO  bot.pipeline  4821 indexable events loaded
-INFO  bot.pipeline  Corpus encoded in 12.3s — shape (4821, 384)  model=all-MiniLM-L6-v2
+INFO  bot.pipeline  Corpus encoded in 12.3s — shape (4821, 768)  model=paraphrase-multilingual-MiniLM-L12-v2
 INFO  bot.main      Bot is running...
 ```
 
@@ -456,7 +457,7 @@ tail -f logs/bot.log
 |---|---|
 | **Bot interface** | [python-telegram-bot](https://python-telegram-bot.org/) v21 (async) |
 | **Preference parsing** | OpenAI GPT-4o-mini with structured output (Pydantic schema) |
-| **Embeddings** | `sentence-transformers` — `all-MiniLM-L6-v2` |
+| **Embeddings** | `sentence-transformers` — `paraphrase-multilingual-MiniLM-L12-v2` |
 | **Similarity search** | In-memory cosine (numpy) or on-disk FAISS |
 | **Keyword fallback** | Custom token-overlap search (`retrieve/keyword_search.py`) |
 | **Event explanations** | OpenAI GPT-4o-mini (one call per `/find` request) |
